@@ -1,8 +1,8 @@
 
-/*
+
  var fs = require('fs');
  var path = require('path');
- */
+
 
 
 //we'll need to run on the whole page
@@ -92,8 +92,8 @@ function parser(html) {
 
     var regex = {
             jsx:/\((\s*<\w+(?:.|\s)*\w+>\s*)\)/g,
-            tag:/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g,
-            attr:/(\w+)=(?:("[^"]+")|{([^}]+)})/g
+            tag:/<(\/)?(\w+)\s?((?:\w+(?:[-_]\w+)*="[^>"]*"\s*)*)?(\/)?>/g /*/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g*/,
+            attr:/(\w+(?:[-_]\w+)*)=(?:("[^>"]*")|{([^>}]*)})/g
         },
         match = {
             tag:[],
@@ -149,6 +149,19 @@ function parser(html) {
                 attributs = node.attr;
                 node.attr = {};
                 while(match.attr = regex.attr.exec(attributs)){
+                    var m = match.attr[1].indexOf('-'),
+                        c;
+                    while(m !== -1){
+                        c = match.attr[1].charAt(m + 1);
+                        if(c.match(/\w/)){
+                            match.attr[1] = match.attr[1].substring(0,m) + c.toUpperCase() + match.attr[1].substring(m+2);
+                        }
+                        else{
+                            match.attr[1] = match.attr[1].substring(0,m) + '_' + match.attr[1].substring(m+2);
+                        }
+
+                        m = match.attr[1].indexOf('-');
+                    }
                     node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
                 }
             }
@@ -280,59 +293,35 @@ function parseContent(content){
     return tagToJs(content,nodeTreeToStringTree(parser(content)));
 }
 
-/*
- function toJSX(pathToFile){
- var realPath = pathToFile;
- if(!realPath.match(/\.js$/)){
- realPath = realPath+=".js";
+function toJSX(pathToFile){
+     var realPath = pathToFile;
+     if(!realPath.match(/\.js$/)){
+     realPath = realPath+=".js";
+     }
+
+     var fileContent = fs.readFileSync(realPath,'utf8');
+     fileContent = parseContent(fileContent);
+
+     var fileName = path.basename(realPath);
+     var newFileName = "__"+fileName;
+     var newPath = realPath.replace(fileName,newFileName);
+
+     fs.writeFileSync(newPath,fileContent);
+     return newPath;
  }
 
- var fileContent = fs.readFileSync(realPath,'utf8');
- fileContent = parseContent(fileContent);
-
- var fileName = path.basename(realPath);
- var newFileName = "__"+fileName;
- var newPath = realPath.replace(fileName,newFileName);
-
- fs.writeFileSync(newPath,fileContent);
- return newPath;
- }
- */
 
 
 
-//module.exports = toJSX;
+module.exports = toJSX;
 
 var content = `
-    Hi guys
-    <h1>Title</h1>;
-    function omg(){
-        return <p>Content</p>
-    }
+    <div class="col-xs-6 col-sm-6 col-md-6">
+        <i class="icon fa fa-terminal"></i>
+        <br/>
+        <br/>
+        <h4>BACK</h4>
+        <p>PhP (Apache)<br/>Js (NodeJS)<br/>SQL & PL/SQL</p>
+    </div>
 `;
 
-/*
-console.log(content.replace(/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g,function (g,m,t) {
-    console.log(arguments);
-    return (m?m:'') + t
-}))
-*/
-function test(content) {
-    console.log(parseContent(content))
-}
-
-function display(tree,stair){
-    stair = stair || 0;
-    var indentation = "\t".repeat(stair);
-    console.log(' ');
-    console.log(indentation+"***** NODE "+stair+" ******")
-    console.log(indentation+tree.type + (tree.tag ? ' ' + tree.tag : ''));
-    //console.log(tree.context);
-    console.log(indentation +  'content : ' + (tree.content ? tree.content : ''));
-    console.log(indentation +  'rendered : ' + (tree.rendered !== undefined ? tree.rendered : ''));
-    if(tree.childs)
-        for(var n = 0;n<tree.childs.length;n++)
-            display(tree.childs[n],stair + 1);
-};
-
-test(content);

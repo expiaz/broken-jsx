@@ -1,8 +1,15 @@
 
 /*
-var fs = require('fs');
-var path = require('path');
+ var fs = require('fs');
+ var path = require('path');
  */
+
+
+String.prototype.replaceBetween = String.prototype.replaceBetween || function(start, end, what) {
+    this.replace(this.substring(start,end),what);
+};
+
+//we'll need to run on the whole page
 
 function getNode(match) {
     return {
@@ -10,14 +17,16 @@ function getNode(match) {
         tag: match[2],
         attr: match[3] || null,
         childs: [],
+        content: '',
+        rendered: '',
         indexs: {
-            begin: match.index,
-            end: match.index + match[0].length
+            begin: match[5],
+            end: match[5] + match[0].length
         }
     }
 }
 
-function getVoidNode(node){
+function getTextNode(node){
     return {
         type:'TEXT',
         content:node
@@ -73,10 +82,21 @@ function ObjToString(obj){
 function childrensToString(childs) {
     //delete blank space between tags
     return childs.filter(function (e) {
-        return e !== '" "'
+        return e.rendered !== '" "'
+    }).map(function (e) {
+        return e.rendered
     }).join(', ');
 }
 
+
+
+function replaceWith(content, replacement, begin, end) {
+    return content.substring(0, begin) + replacement + content.substring(end, content.length);
+}
+
+
+
+//finding
 function parser(html) {
 
     var regex = {
@@ -92,20 +112,26 @@ function parser(html) {
             last:0,
             now:0
         },
-        stack = [{childs:[]}], node, trimedHTML, attributs;
+        stack = [], node, trimedHTML, attributs;
+
+
+    console.log('[parse] html',html);
 
 
 
-    while(match.tag = regex.tag.exec(html)){
+    html = html.replace(regex.tag, engine.bind(this));
 
-        node = getNode(match.tag);
+    function engine() {
+        node = getNode(Array.prototype.slice.call(arguments));
 
         cursor.now = node.indexs.begin;
 
         if(cursor.now > cursor.last){
-            trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
-            if(trimedHTML.length){
-                stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
+            if(stack.length > 1){
+                trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
+                if(trimedHTML.length){
+                    stack[stack.length - 1].childs.push(getTextNode(trimedHTML));
+                }
             }
         }
 
@@ -114,6 +140,8 @@ function parser(html) {
             var openingNode = stack.pop(),
                 closingNode = node;
 
+            console.log('[Parser::engine] openingNode',openingNode);
+
             if(openingNode.tag != closingNode.tag)
                 return;
 
@@ -121,10 +149,20 @@ function parser(html) {
 
             openingNode.indexs.end = closingNode.indexs.end;
 
-            stack[stack.length - 1].childs.push(openingNode);
+            //openingNode.content = html.substring(openingNode.indexs.begin,openingNode.indexs.end)
+
+            if(stack.length === 0){
+                //calculate rendering
+                openingNode = calculSingleRenderingOfANode(openingNode);
+                console.log('[Parser::engine] openingNode after rendering',openingNode);
+                html.replaceBetween(openingNode.indexs.begin, openingNode.indexs.end, openingNode.rendered);
+            }
+            else{
+                stack[stack.length - 1].childs.push(openingNode);
+            }
+
         }
         else{
-
             if(node.attr){
                 attributs = node.attr;
                 node.attr = {};
@@ -135,103 +173,147 @@ function parser(html) {
             if(node.type == 'OPENING'){
                 //begining tag <tagName ...>
                 stack.push(node);
+                return arguments[0];
             }
             else{
                 //autoclosing tag <tagName ... />
                 node.type = 'NODE';
-                stack[stack.length - 1].childs.push(node);
+                if(stack.length === 0){
+                    node = calculSingleRenderingOfANode(node);
+                    return node.rendered;
+                }
+                else{
+                    stack[stack.length - 1].childs.push(node);
+                }
             }
         }
 
         cursor.last = node.indexs.end;
+
+        return arguments[0];
     }
 
-    if(html.length > cursor.last){
-        trimedHTML = trimHTML(html.substring(cursor.last, html.length));
-        if(trimedHTML.length){
-            stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
-        }
-    }
-
-    return stack.pop().childs;
+    return html;
 
 }
 
+
+
+//rendering
 function nodeTreeToStringTree(nodeTree){
 
-    var stringTree = [],
-        node;
+    var node, renderedNodeTree = nodeTree;
 
-    for(var i = 0, l = nodeTree.length; i < l; i++){
-        node = nodeTree[i];
+    for(var i = 0, l = renderedNodeTree.length; i < l; i++){
+        node = renderedNodeTree[i];
+        console.log('[nodeTreeToStringTree] child', node);
         switch(node.type){
             case 'TEXT':
-                stringTree.push(createTextNode(node));
+                console.log('[nodeTreeToStringTree] text');
+                node.rendered = createTextNode(node);
                 break;
             case 'NODE':
+                console.log('[nodeTreeToStringTree] node');
                 if(node.childs.length){
-                    stringTree.push(createNode(
+                    console.log('[nodeTreeToStringTree] get childs',node.childs);
+                    node.rendered = createNode(
                         node.tag,
                         node.attr,
                         nodeTreeToStringTree(node.childs)
-                    ));
+                    );
                 }
                 else{
-                    stringTree.push(createNode(
+                    node.rendered = createNode(
                         node.tag,
                         node.attr
-                    ));
+                    );
                 }
                 break;
         }
     }
-
-    return childrensToString(stringTree)
+    console.log('[nodeTreeToStringTree] rendered',renderedNodeTree);
+    return renderedNodeTree;
 }
 
+//return the rendering method of this node
+function calculSingleRenderingOfANode(theNode){
+
+    return nodeTreeToStringTree([theNode])[0];
+
+}
+
+//replacement
+function tagToJs(html,nodeTree){
+    var i = 0, node, out = html, decalage = 0;
+    for(var l = nodeTree.length; i < l; i++){
+        node = nodeTree[i];
+        console.log('[tagToJs] replacing ', node.content, node.rendered);
+        out = replaceWith(out, node.rendered, node.indexs.begin + decalage, node.indexs.end + decalage);
+        decalage += node.rendered.length - (node.indexs.end - node.indexs.begin);
+    }
+    return out;
+}
+
+//entry point
 function parseContent(content){
-    var replaced = content.replace(/\((\s*<\w+(?:.|\s)*\w+\/?>\s*)\)/g,function (fmatch,match) {
-        console.log('[parseContent] in with '+JSON.stringify(match));
-        return "[" + nodeTreeToStringTree(parser(match)) + "]";
-    });
-    return replaced;
+
+    return tagToJs(content,nodeTreeToStringTree(parser(content)));
 }
 
 /*
-function toJSX(pathToFile){
-    var realPath = pathToFile;
-    if(!realPath.match(/\.js$/)){
-        realPath = realPath+=".js";
-    }
+ function toJSX(pathToFile){
+ var realPath = pathToFile;
+ if(!realPath.match(/\.js$/)){
+ realPath = realPath+=".js";
+ }
 
-    var fileContent = fs.readFileSync(realPath,'utf8');
-    fileContent = parseContent(fileContent);
+ var fileContent = fs.readFileSync(realPath,'utf8');
+ fileContent = parseContent(fileContent);
 
-    var fileName = path.basename(realPath);
-    var newFileName = "__"+fileName;
-    var newPath = realPath.replace(fileName,newFileName);
+ var fileName = path.basename(realPath);
+ var newFileName = "__"+fileName;
+ var newPath = realPath.replace(fileName,newFileName);
 
-    fs.writeFileSync(newPath,fileContent);
-    return newPath;
-}
-*/
+ fs.writeFileSync(newPath,fileContent);
+ return newPath;
+ }
+ */
 
 
 
 //module.exports = toJSX;
 
 var content = `
-    (
-        <br/>
-        <div onClick={this.props.nameHandler}>
-            Hello <span>Guys</span>
-        </div>
-        <TagName prop={a}/>
-    )
+    Hi guys
+    <h1>Title</h1>;
+    function omg(){
+        return <p>Content</p>
+        <Tag/>
+    }
 `;
 
+/*
+ console.log(content.replace(/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g,function (g,m,t) {
+ console.log(arguments);
+ return (m?m:'') + t
+ }))
+ */
 function test(content) {
-    console.log(parseContent(content));
+    console.log(parser(content))
 }
+
+function display(tree,stair){
+    stair = stair || 0;
+    var indentation = "\t".repeat(stair);
+    console.log(' ');
+    console.log(indentation+"***** NODE "+stair+" ******")
+    console.log(indentation+tree.type + (tree.tag ? ' ' + tree.tag : ''));
+    //console.log(tree.context);
+    console.log(indentation +  'content : ' + (tree.content ? tree.content : ''));
+    console.log(indentation +  'rendered : ' + (tree.rendered !== undefined ? tree.rendered : ''));
+    if(tree.childs)
+        for(var n = 0;n<tree.childs.length;n++)
+            display(tree.childs[n],stair + 1);
+};
 
 test(content);
