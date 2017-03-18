@@ -1,42 +1,70 @@
-var n = 'return (<Layout bindAction={this.props.bindAction.bind(this)} class="name" jeanLou="Ici">' +
-        '<div class="jean">' +
-            '<div cN={this.props.id}>' +
-                '<a href="jsx.js">JXS</a>' +
-                'Last' +
-            '</div>' +
-        '</div>' +
-    '</Layout>' +
-    '<Footer/>);';
+ var fs = require('fs');
+ var path = require('path');
 
-var fs = require('fs');
-var path = require('path');
 
-function refactor(m){
+//we'll need to run on the whole page
+
+function getNode(match) {
     return {
-        fullmatch: m[0],
-        length: m[0].length,
-        tag:m[1],
-        attr:m[2] || null,
-        child:m[3] || null,
-        index: [m.index,m.index+m[0].length]
+        type: match[1] ? 'CLOSING' : match[4] ? 'AUTOCLOSING' : 'OPENING',
+        tag: match[2],
+        attr: match[3] || null,
+        childs: [],
+        content: '',
+        rendered: '',
+        indexs: {
+            begin: match[5],
+            end: match[5] + match[0].length
+        }
     }
 }
 
+function getTextNode(node){
+    return {
+        type:'TEXT',
+        content:node
+    }
+}
+
+function createNode(tag,attrs,childs){
+    tag = tag.charCodeAt(0) > 90 ? '"'+tag+'"' : tag;
+    attrs = attrs !== void 0 && attrs != null ? ObjToString(attrs) : 'null';
+    childs = childs !== void 0 && childs != null ? Array.isArray(childs) && childs.length ?  childrensToString(childs) : childs : 'null';
+    return 'A.createElement(' + tag + ', ' + attrs + ', ' + childs + ')';
+}
+
+function createTextNode(node){
+    if(typeof node == "string")
+        return '"'+node+'"';
+    else
+        return '"'+node.content+'"';
+}
+
 function trimHTML(html){
-    return html.replace(/\s*$/,'').replace(/^\s*/,'').replace(/\n*\r*\t*/,'');
+    console.log('[trimHTML] in with '+ JSON.stringify(html));
+    var safe =  html
+        .replace(/[\n\r\t]/g,'')
+        .replace(/ +/g,' ')
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    console.log('[trimHTML] out with '+ JSON.stringify(safe));
+    return safe;
 }
 
 function ObjToString(obj){
     if(typeof obj != "object")
         return obj;
 
-    if(!Object.keys(obj))
+    if(!Object.keys(obj).length)
         return "{}";
 
     var ret = "";
     for(var k in obj){
         if(ret.length == 0)
-            ret += " {"+k+": "+obj[k];
+            ret += "{"+k+": "+obj[k];
         else
             ret += ", "+k+": "+obj[k];
     }
@@ -44,127 +72,251 @@ function ObjToString(obj){
     return ret;
 }
 
-function ArrayToString(arr,stackStair) {
-
-    if(!Array.isArray(arr))
-        return arr;
-
-    if(!arr.length)
-        return "[]";
-
-    var ret = "";
-    for(var i = 0, l = arr.length; i<l; i++){
-        if(ret.length == 0)
-            ret += " [\n" + '\t'.repeat(stackStair+1) + arr[i];
-        else
-            ret += ",\n "+ '\t'.repeat(stackStair+1) + arr[i];
-    }
-    ret += '\n' + '\t'.repeat(stackStair) + "]";
-
-    return ret;
+function childrensToString(childs) {
+    //delete blank space between tags
+    return childs.filter(function (e) {
+        return e.rendered !== '" "'
+    }).map(function (e) {
+        return e.rendered
+    }).join(', ');
 }
 
-function createVNode(tag,attrs,childs){
-    return 'A.createElement("'+tag+'",'+(attrs != null ? ObjToString(attrs) : ' null')+','+(childs != null && childs.length != 0 ? childs : ' null')+')';
+function replaceWith(content, replacement, begin, end) {
+    return content.substring(0, begin) + replacement + content.substring(end, content.length);
 }
 
-function createVoidNode(content){
-    return 'A.createVoidElement("'+content+'")';
-}
+function parser(html) {
 
-function parse(content,stack){
+    var regex = {
+            jsx:/\((\s*<\w+(?:.|\s)*\w+>\s*)\)/g,
+            tag:/<(\/)?(\w+)\s?((?:\w+(?:[-_]\w+)*="[^>"]*"\s*)*)?(\/)?>/g /*/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g*/,
+            attr:/(\w+(?:[-_]\w+)*)=(?:("[^>"]*")|{([^>}]*)})/g
+        },
+        match = {
+            tag:[],
+            attr:[],
+        },
+        cursor = {
+            last:0,
+            now:0
+        },
+        stack = [{childs:[]}], node, trimedHTML, attributs;
 
-    if(stack == void 0)
-        stack = 1;
 
-    var nodes = [],
-        tagReg = /<(\w+)\s?([^>\/]*)(?:\/>|>((?:.|\s)*)<\/\1>)/g,
-        tagMatch,
-        cursor = 0;
-    while(tagMatch = tagReg.exec(content)){
+    console.log('[parse] html',html);
 
-        console.log(tagMatch);
 
-        tagMatch = refactor(tagMatch);
-        if(tagMatch.attr != null){
-            var regAttr = /(\w+)=(?:("[^"]+")|{([^}]+)})/g;
-            var attrMatch = [];
-            var attr = {};
-            while(attrMatch = regAttr.exec(tagMatch.attr)){
-                attr[attrMatch[1]] = attrMatch[2] || attrMatch[3];
+
+    html.replace(regex.tag, engine.bind(this));
+
+    function engine() {
+        node = getNode(Array.prototype.slice.call(arguments));
+        console.log('[parser] matched',node);
+
+        cursor.now = node.indexs.begin;
+
+        if(cursor.now > cursor.last){
+            console.log('[parser] text node finded ',html.substring(cursor.last, cursor.now),stack.length > 1);
+            if(stack.length > 1){
+                trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
+                if(trimedHTML.length){
+                    stack[stack.length - 1].childs.push(getTextNode(trimedHTML));
+                }
             }
-            tagMatch.attr = attr;
         }
 
-        console.log('attr');
+        if(node.type == 'CLOSING'){
+            //end of tag </tagName>
+            var openingNode = stack.pop(),
+                closingNode = node;
 
-        console.log(tagMatch.index[0] + ">" + cursor);
+            if(openingNode.tag != closingNode.tag)
+                return;
 
-        if(tagMatch.index[0] > cursor) {
-            var html = content.substring(cursor, tagMatch.index[0]);
-            var trimed = trimHTML(html);
-            if(trimed.length){
-                console.log('pushing voidNode bf',trimed);
-                nodes.push(createVoidNode(trimed));
+            openingNode.type = 'NODE';
+
+            openingNode.indexs.end = closingNode.indexs.end;
+
+            openingNode.content = html.substring(openingNode.indexs.begin,openingNode.indexs.end)
+
+            stack[stack.length - 1].childs.push(openingNode);
+        }
+        else{
+            if(node.attr){
+                attributs = node.attr;
+                node.attr = {};
+                while(match.attr = regex.attr.exec(attributs)){
+                    var m = match.attr[1].indexOf('-'),
+                        c;
+                    while(m !== -1){
+                        c = match.attr[1].charAt(m + 1);
+                        if(c.match(/\w/)){
+                            match.attr[1] = match.attr[1].substring(0,m) + c.toUpperCase() + match.attr[1].substring(m+2);
+                        }
+                        else{
+                            match.attr[1] = match.attr[1].substring(0,m) + '_' + match.attr[1].substring(m+2);
+                        }
+
+                        m = match.attr[1].indexOf('-');
+                    }
+                    node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
+                }
             }
-
+            if(node.type == 'OPENING'){
+                //begining tag <tagName ...>
+                stack.push(node);
+            }
+            else{
+                //autoclosing tag <tagName ... />
+                node.type = 'NODE';
+                stack[stack.length - 1].childs.push(node);
+            }
         }
 
-        console.log('bf content');
+        cursor.last = node.indexs.end;
 
-        cursor = tagMatch.index[1];
-
-        console.log('cursor');
-
-        if(tagMatch.child != null){
-            console.log('bf childs');
-            tagMatch.child = parse(tagMatch.child,stack+1);
-            console.log('af childs');
-        }
-
-        console.log('childs');
-
-        nodes.push(createVNode(tagMatch.tag,tagMatch.attr,tagMatch.child));
-    }
-    console.log(cursor + ">" + content.length);
-    if(cursor < content.length){
-        var html = content.substring(cursor,content.length);
-        var trimed = trimHTML(html);
-        if(trimed.length){
-            console.log('pushing voidNode af',trimed);
-            nodes.push(createVoidNode(trimed));
-        }
-
+        return html;
     }
 
-    console.log('af content');
+    /*
+    while(match.tag = regex.tag.exec(html)){
 
-    return ArrayToString(nodes,stack);
+        node = getNode(match.tag);
 
+        console.log('[parser] matched',node);
+
+        cursor.now = node.indexs.begin;
+
+        if(cursor.now > cursor.last){
+            if(nbTagsPushed == 0) return;
+            trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
+            if(trimedHTML.length){
+                nbTagsPushed++;
+                stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
+            }
+        }
+
+        if(node.type == 'CLOSING'){
+            //end of tag </tagName>
+            var openingNode = stack.pop(),
+                closingNode = node;
+
+            if(openingNode.tag != closingNode.tag)
+                return;
+
+            openingNode.type = 'NODE';
+
+            openingNode.indexs.end = closingNode.indexs.end;
+
+            nbTagsPushed++;
+            stack[stack.length - 1].childs.push(openingNode);
+        }
+        else{
+            if(node.attr){
+                attributs = node.attr;
+                node.attr = {};
+                while(match.attr = regex.attr.exec(attributs)){
+                    node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
+                }
+            }
+            if(node.type == 'OPENING'){
+                //begining tag <tagName ...>
+                stack.push(node);
+            }
+            else{
+                //autoclosing tag <tagName ... />
+                node.type = 'NODE';
+                nbTagsPushed++;
+                stack[stack.length - 1].childs.push(node);
+            }
+        }
+
+        cursor.last = node.indexs.end;
+    }
+    */
+
+    return stack.pop().childs;
+
+}
+
+function nodeTreeToStringTree(nodeTree){
+
+    var node, renderedNodeTree = nodeTree;
+
+    for(var i = 0, l = renderedNodeTree.length; i < l; i++){
+        node = renderedNodeTree[i];
+        console.log('[nodeTreeToStringTree] child', node);
+        switch(node.type){
+            case 'TEXT':
+                console.log('[nodeTreeToStringTree] text');
+                node.rendered = createTextNode(node);
+                break;
+            case 'NODE':
+                console.log('[nodeTreeToStringTree] node');
+                if(node.childs.length){
+                    console.log('[nodeTreeToStringTree] get childs',node.childs);
+                    node.rendered = createNode(
+                        node.tag,
+                        node.attr,
+                        nodeTreeToStringTree(node.childs)
+                    );
+                }
+                else{
+                    node.rendered = createNode(
+                        node.tag,
+                        node.attr
+                    );
+                }
+                break;
+        }
+    }
+    console.log('[nodeTreeToStringTree] rendered',renderedNodeTree);
+    return renderedNodeTree;
+}
+
+function tagToJs(html,nodeTree){
+    var i = 0, node, out = html, decalage = 0;
+    for(var l = nodeTree.length; i < l; i++){
+        node = nodeTree[i];
+        console.log('[tagToJs] replacing ', node.content, node.rendered);
+        out = replaceWith(out, node.rendered, node.indexs.begin + decalage, node.indexs.end + decalage);
+        decalage += node.rendered.length - (node.indexs.end - node.indexs.begin);
+    }
+    return out;
 }
 
 function parseContent(content){
-    var replaced = content.replace(/\((\s*<\w+(?:.|\s)*\w+>\s*)\)/g,function (fmatch,match) {
-        return parse(match);
-    });
-    return replaced;
+
+    return tagToJs(content,nodeTreeToStringTree(parser(content)));
 }
 
 function toJSX(pathToFile){
-    var realPath = pathToFile;
-    if(!realPath.match(/\.js$/)){
-        realPath = realPath+=".js";
-    }
+     var realPath = pathToFile;
+     if(!realPath.match(/\.js$/)){
+     realPath = realPath+=".js";
+     }
 
-    var fileContent = fs.readFileSync(realPath,'utf8');
-    fileContent = parseContent(fileContent);
+     var fileContent = fs.readFileSync(realPath,'utf8');
+     fileContent = parseContent(fileContent);
 
-    var fileName = path.basename(realPath);
-    var newFileName = "__"+fileName;
-    var newPath = realPath.replace(fileName,newFileName);
+     var fileName = path.basename(realPath);
+     var newFileName = "__"+fileName;
+     var newPath = realPath.replace(fileName,newFileName);
 
-    fs.writeFileSync(newPath,fileContent);
-    return newPath;
-}
+     fs.writeFileSync(newPath,fileContent);
+     return newPath;
+ }
+
 
 module.exports = toJSX;
+
+var content = `
+    <div class="col-xs-6 col-sm-6 col-md-6">
+        <i class="icon fa fa-terminal"></i>
+        <br/>
+        <br/>
+        <h4>BACK</h4>
+        <p>PhP (Apache)<br/>Js (NodeJS)<br/>SQL & PL/SQL</p>
+    </div>
+`;
+
