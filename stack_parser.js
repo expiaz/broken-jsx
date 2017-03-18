@@ -1,7 +1,11 @@
-var fs = require('fs');
-var path = require('path');
 
-var baseNesting = 0;
+/*
+ var fs = require('fs');
+ var path = require('path');
+ */
+
+
+//we'll need to run on the whole page
 
 function getNode(match) {
     return {
@@ -9,46 +13,48 @@ function getNode(match) {
         tag: match[2],
         attr: match[3] || null,
         childs: [],
+        content: '',
+        rendered: '',
         indexs: {
-            begin: match.index,
-            end: match.index + match[0].length
+            begin: match[5],
+            end: match[5] + match[0].length
         }
     }
 }
 
-function getVoidNode(node){
+function getTextNode(node){
     return {
         type:'TEXT',
         content:node
     }
 }
 
-function createNode(tag,attrs,childs,nestingLevel){
-    if(typeof tag == "object"){
-        nestingLevel = attrs;
-        attrs = tag.attr;
-        childs = tag.childs;
-        tag = tag.tag;
-    }
-    if(nestingLevel == void 0)
-        nestingLevel = 0;
+function createNode(tag,attrs,childs){
     tag = tag.charCodeAt(0) > 90 ? '"'+tag+'"' : tag;
-    attrs = attrs != null ? ObjToString(attrs) : 'null';
-    childs = childs != null && childs.length ? ArrayToString(childs,nestingLevel) : 'null';
+    attrs = attrs !== void 0 && attrs != null ? ObjToString(attrs) : 'null';
+    childs = childs !== void 0 && childs != null ? Array.isArray(childs) && childs.length ?  childrensToString(childs) : childs : 'null';
     return 'A.createElement(' + tag + ', ' + attrs + ', ' + childs + ')';
 }
 
-function createVoidNode(node){
+function createTextNode(node){
     if(typeof node == "string")
-        return 'A.createVoidElement("'+node+'")';
+        return '"'+node+'"';
     else
-        return 'A.createVoidElement("'+node.content+'")';
+        return '"'+node.content+'"';
 }
 
-
-
 function trimHTML(html){
-    return html.replace(/\s*$/g,'').replace(/^\s*/g,'').replace(/\n\r\t/g,'').replace(/ +/g,' ').replace(/\"/g,'\\"').replace(/\'/,"\\'");
+    console.log('[trimHTML] in with '+ JSON.stringify(html));
+    var safe =  html
+        .replace(/[\n\r\t]/g,'')
+        .replace(/ +/g,' ')
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    console.log('[trimHTML] out with '+ JSON.stringify(safe));
+    return safe;
 }
 
 function ObjToString(obj){
@@ -69,34 +75,20 @@ function ObjToString(obj){
     return ret;
 }
 
-function ArrayToString(arr,stackStair) {
-
-    if(!Array.isArray(arr))
-        return arr;
-
-    if(!arr.length)
-        return '[]';
-
-    if(stackStair == void 0)
-        stackStair = 0;
-
-    var ret = '';
-    for(var i = 0, l = arr.length; i<l; i++){
-        if(ret.length == 0)
-            ret += '[\n' + '    '.repeat(stackStair+1) + arr[i];
-        else
-            ret += ',\n' + '    '.repeat(stackStair+1) + arr[i];
-    }
-    ret += '\n' + '    '.repeat(stackStair) + ']';
-
-    return ret;
+function childrensToString(childs) {
+    //delete blank space between tags
+    return childs.filter(function (e) {
+        return e.rendered !== '" "'
+    }).map(function (e) {
+        return e.rendered
+    }).join(', ');
 }
 
-
-
+function replaceWith(content, replacement, begin, end) {
+    return content.substring(0, begin) + replacement + content.substring(end, content.length);
+}
 
 function parser(html) {
-    baseNesting = -1;
 
     var regex = {
             jsx:/\((\s*<\w+(?:.|\s)*\w+>\s*)\)/g,
@@ -111,55 +103,33 @@ function parser(html) {
             last:0,
             now:0
         },
-        stack = [{childs:[]}], node, trimedHTML, nodes = [];
+        stack = [{childs:[]}], node, trimedHTML, attributs;
+
+
+    console.log('[parse] html',html);
 
 
 
-    while(match.tag = regex.tag.exec(html)){
+    html.replace(regex.tag, engine.bind(this));
 
-
-
-        node = getNode(match.tag);
+    function engine() {
+        node = getNode(Array.prototype.slice.call(arguments));
+        console.log('[parser] matched',node);
 
         cursor.now = node.indexs.begin;
 
         if(cursor.now > cursor.last){
-            var substrHtml = html.substring(cursor.last, cursor.now);
-
-            if(baseNesting == -1){
-                if(substrHtml.indexOf('\n') != -1) {
-                    var nest = substrHtml.substring(substrHtml.indexOf('\n'), substrHtml.length).split('\t').length - 1;
-                    if (nest)
-                        baseNesting = nest;
-                    else {
-                        nest = substrHtml.substring(substrHtml.indexOf('\n'), substrHtml.length).split('    ').length - 1;
-                        if (nest)
-                            baseNesting = nest;
-                        else
-                            baseNesting = 0;
-                    }
+            console.log('[parser] text node finded ',html.substring(cursor.last, cursor.now),stack.length > 1);
+            if(stack.length > 1){
+                trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
+                if(trimedHTML.length){
+                    stack[stack.length - 1].childs.push(getTextNode(trimedHTML));
                 }
-                else
-                    baseNesting = 0;
-            }
-
-            trimedHTML = trimHTML(substrHtml);
-            if(trimedHTML.length){
-                stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
             }
         }
 
-        if(node.type == 'OPENING'){
-            if(node.attr){
-                var attributs = node.attr;
-                node.attr = {};
-                while(match.attr = regex.attr.exec(attributs)){
-                    node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
-                }
-            }
-            stack.push(node);
-        }
-        else if(node.type == 'CLOSING'){
+        if(node.type == 'CLOSING'){
+            //end of tag </tagName>
             var openingNode = stack.pop(),
                 closingNode = node;
 
@@ -170,91 +140,199 @@ function parser(html) {
 
             openingNode.indexs.end = closingNode.indexs.end;
 
+            openingNode.content = html.substring(openingNode.indexs.begin,openingNode.indexs.end)
+
             stack[stack.length - 1].childs.push(openingNode);
         }
         else{
-            node.type = 'NODE';
             if(node.attr){
-                var attributs = node.attr;
+                attributs = node.attr;
                 node.attr = {};
                 while(match.attr = regex.attr.exec(attributs)){
                     node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
                 }
             }
-            stack[stack.length - 1].childs.push(node);
+            if(node.type == 'OPENING'){
+                //begining tag <tagName ...>
+                stack.push(node);
+            }
+            else{
+                //autoclosing tag <tagName ... />
+                node.type = 'NODE';
+                stack[stack.length - 1].childs.push(node);
+            }
+        }
+
+        cursor.last = node.indexs.end;
+
+        return html;
+    }
+
+    /*
+    while(match.tag = regex.tag.exec(html)){
+
+        node = getNode(match.tag);
+
+        console.log('[parser] matched',node);
+
+        cursor.now = node.indexs.begin;
+
+        if(cursor.now > cursor.last){
+            if(nbTagsPushed == 0) return;
+            trimedHTML = trimHTML(html.substring(cursor.last, cursor.now));
+            if(trimedHTML.length){
+                nbTagsPushed++;
+                stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
+            }
+        }
+
+        if(node.type == 'CLOSING'){
+            //end of tag </tagName>
+            var openingNode = stack.pop(),
+                closingNode = node;
+
+            if(openingNode.tag != closingNode.tag)
+                return;
+
+            openingNode.type = 'NODE';
+
+            openingNode.indexs.end = closingNode.indexs.end;
+
+            nbTagsPushed++;
+            stack[stack.length - 1].childs.push(openingNode);
+        }
+        else{
+            if(node.attr){
+                attributs = node.attr;
+                node.attr = {};
+                while(match.attr = regex.attr.exec(attributs)){
+                    node.attr[match.attr[1]] = match.attr[2] || match.attr[3];
+                }
+            }
+            if(node.type == 'OPENING'){
+                //begining tag <tagName ...>
+                stack.push(node);
+            }
+            else{
+                //autoclosing tag <tagName ... />
+                node.type = 'NODE';
+                nbTagsPushed++;
+                stack[stack.length - 1].childs.push(node);
+            }
         }
 
         cursor.last = node.indexs.end;
     }
-
-    if(html.length > cursor.last){
-        trimedHTML = trimHTML(html.substring(cursor.last, html.length));
-        if(trimedHTML.length){
-            stack[stack.length - 1].childs.push(getVoidNode(trimedHTML));
-        }
-    }
-
-    if(baseNesting == -1)
-        baseNesting = 0;
+    */
 
     return stack.pop().childs;
 
 }
 
-function nodeTreeToStringTree(nodeTree,nestingLevel){
-    if(nestingLevel == void 0)
-        nestingLevel = 0;
-    var stringTree = [],
-        node;
+function nodeTreeToStringTree(nodeTree){
 
-    for(var i = 0, l = nodeTree.length; i < l; i++){
-        node = nodeTree[i];
+    var node, renderedNodeTree = nodeTree;
+
+    for(var i = 0, l = renderedNodeTree.length; i < l; i++){
+        node = renderedNodeTree[i];
+        console.log('[nodeTreeToStringTree] child', node);
         switch(node.type){
             case 'TEXT':
-                stringTree.push(createVoidNode(node));
+                console.log('[nodeTreeToStringTree] text');
+                node.rendered = createTextNode(node);
                 break;
             case 'NODE':
+                console.log('[nodeTreeToStringTree] node');
                 if(node.childs.length){
-                    stringTree.push(createNode(node.tag,node.attr,nodeTreeToStringTree(node.childs,nestingLevel+1),nestingLevel));
+                    console.log('[nodeTreeToStringTree] get childs',node.childs);
+                    node.rendered = createNode(
+                        node.tag,
+                        node.attr,
+                        nodeTreeToStringTree(node.childs)
+                    );
                 }
                 else{
-                    stringTree.push(createNode(node));
+                    node.rendered = createNode(
+                        node.tag,
+                        node.attr
+                    );
                 }
                 break;
         }
     }
+    console.log('[nodeTreeToStringTree] rendered',renderedNodeTree);
+    return renderedNodeTree;
+}
 
-    return stringTree;
+function tagToJs(html,nodeTree){
+    var i = 0, node, out = html, decalage = 0;
+    for(var l = nodeTree.length; i < l; i++){
+        node = nodeTree[i];
+        console.log('[tagToJs] replacing ', node.content, node.rendered);
+        out = replaceWith(out, node.rendered, node.indexs.begin + decalage, node.indexs.end + decalage);
+        decalage += node.rendered.length - (node.indexs.end - node.indexs.begin);
+    }
+    return out;
 }
 
 function parseContent(content){
-    var replaced = content.replace(/\((\s*<\w+(?:.|\s)*\w+\/?>\s*)\)/g,function (fmatch,match) {
 
-        var p = parser(match),
-            n = nodeTreeToStringTree(p,baseNesting);
-
-        return "[\n" + '    '.repeat(baseNesting) + n.join(',\n'+'    '.repeat(baseNesting)) + '\n' + '    '.repeat(baseNesting-1) + "]";
-    });
-    return replaced;
+    return tagToJs(content,nodeTreeToStringTree(parser(content)));
 }
 
-function toJSX(pathToFile){
-    var realPath = pathToFile;
-    if(!realPath.match(/\.js$/)){
-        realPath = realPath+=".js";
+/*
+ function toJSX(pathToFile){
+ var realPath = pathToFile;
+ if(!realPath.match(/\.js$/)){
+ realPath = realPath+=".js";
+ }
+
+ var fileContent = fs.readFileSync(realPath,'utf8');
+ fileContent = parseContent(fileContent);
+
+ var fileName = path.basename(realPath);
+ var newFileName = "__"+fileName;
+ var newPath = realPath.replace(fileName,newFileName);
+
+ fs.writeFileSync(newPath,fileContent);
+ return newPath;
+ }
+ */
+
+
+
+//module.exports = toJSX;
+
+var content = `
+    Hi guys
+    <h1>Title</h1>;
+    function omg(){
+        return <p>Content</p>
     }
+`;
 
-    var fileContent = fs.readFileSync(realPath,'utf8');
-    fileContent = parseContent(fileContent);
-
-    var fileName = path.basename(realPath);
-    var newFileName = "__"+fileName;
-    var newPath = realPath.replace(fileName,newFileName);
-
-    fs.writeFileSync(newPath,fileContent);
-    return newPath;
+/*
+console.log(content.replace(/<(\/)?(\w+)\s?([^>\/]*)(\/)?>/g,function (g,m,t) {
+    console.log(arguments);
+    return (m?m:'') + t
+}))
+*/
+function test(content) {
+    console.log(parseContent(content))
 }
 
-module.exports = toJSX;
+function display(tree,stair){
+    stair = stair || 0;
+    var indentation = "\t".repeat(stair);
+    console.log(' ');
+    console.log(indentation+"***** NODE "+stair+" ******")
+    console.log(indentation+tree.type + (tree.tag ? ' ' + tree.tag : ''));
+    //console.log(tree.context);
+    console.log(indentation +  'content : ' + (tree.content ? tree.content : ''));
+    console.log(indentation +  'rendered : ' + (tree.rendered !== undefined ? tree.rendered : ''));
+    if(tree.childs)
+        for(var n = 0;n<tree.childs.length;n++)
+            display(tree.childs[n],stair + 1);
+};
 
-
+test(content);
