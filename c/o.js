@@ -1,5 +1,15 @@
-var jsx = require('./../stack_parser');
+var v = require('./n/v');
+var A = require('./../A');
 
-var v = require(jsx('./n/v'));
+var begin = new Date();
 
-console.log(v);
+for(var i = 0; i < 10000; i++){
+    A.render(
+        v(),
+        document.getElementById('app')
+    );
+    A.unmount(document.getElementById('app'));
+}
+
+
+console.log(new Date() - begin);
